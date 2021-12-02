@@ -1,6 +1,33 @@
 %% Self Driving Cars Control Part 2
 % worked on by Dyllian Powell, Spencer Talbot, and Joseph Drockton
 % This file is empty currently :]
+clc
+clear all
+close all
+testtrack = load('TestTrack.mat')
+center = testtrack.TestTrack.cline
+thet = testtrack.TestTrack.theta
+x = center(1,:)
+y = center(2,:)
+plot(center(1,:),center(2,:))
+hold on
+title('Center Line of Track')
+quiver(x(1:10:end),y(1:10:end),cos(thet(1:10:end)),sin(thet(1:10:end)))
+
+
+testinput = zeros(1000,2)
+testinput(:,2) = 5000
+[Y, T]=forwardIntegrateControlInput(testinput)
+plot(Y(:,1),Y(:,3),'b*')
+
+
+
+figure(2)
+plot(diff(thet))
+movagin = movmean(diff(thet),10)
+plot(movagin)
+lpinp = lowpass(movagin,100)
+plot(lpinp)
 
 % Problem 3 homework 1 
 %vehicle parameters
