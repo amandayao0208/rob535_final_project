@@ -4,6 +4,17 @@
 
 % Problem 3 homework 1 
 %vehicle parameters
+close all 
+clear all
+clc 
+lpinp = load('lowpassheadingdiff.mat');
+lpinp = horzcat(0,lpinp.lpinp);
+
+testtrack = load('TestTrack.mat');
+center = testtrack.TestTrack.cline;
+thet = testtrack.TestTrack.theta;
+
+
 delta = [-.5, .5]; % need to use this range to generate Delta_feedback most likely
 Fx = [-5000, 5000];% not sure how we constrain this range, probably similar to delta_fb
 m = 1400;
@@ -32,9 +43,35 @@ T=0:0.01:0.5;
 
 %Ca_r= F_zr*B*C*D;
 %Ca_f= F_zf*B*C*D;
+initial_z = [287; 5; -176; 0; 2; 0];
+Yprev = initial_z;
+Ystore = Yprev;
+for i=1:1000
+    testinput = steering(lpinp,center,[Yprev(1),Yprev(3)]);
+    [Y, T]=forwardIntegrateControlInput(testinput,Yprev);
+    Ystore = horzcat(Ystore,Y');
+    Yprev = Y(end,:)'; 
+end
+
+x = center(1,:);
+y = center(2,:);
+plot(center(1,:),center(2,:));
+hold on
+title('Center Line of Track');
+% quiver(x(1:10:end),y(1:10:end),cos(thet(1:10:end)),sin(thet(1:10:end)))
+
+%subplot(3,1,1);
+Y = Ystore'; 
+plot(Y(:,1),Y(:,3),'b*');
+
+hold on
+
+%subplot(3,1,2)
+%plot(T,Y(:,2))
+
 
 % 1.2.1 Generate the equilibrium trajectory using Euler integration and linear tire forces
-initial_z = [287; 5; -176; 0; 2; 0];
+
 Z_eq=zeros(101,6);
 dt = 0.01;
 
@@ -93,7 +130,42 @@ end
 
 %%FINAL OUTPUT WE WANT IS ARRAY OF [delta, Fx,n]
 % how do we generate Fx? 
-
+function move = steering(lpinp, cenpts, curr_pt)
+    Idx = knnsearch(cenpts', curr_pt);
+    matchpt = lpinp(1, Idx);
+    
+    output = zeros(10,2);
+    output(:,2) = 500;
+    %% FOR SOME REASON LEFT AND RIGHT ARE FLIPPED RIGHT NOW SO DEAL WITH IT
+    %straight
+    %slight left
+    s_l = -0.025;
+    %slight right
+    s_r = 0.025; 
+    %hard left
+    h_l = -0.1;
+    %hard right
+    h_r = 0.1; 
+    
+    if(matchpt < h_l)
+       %turn hard left
+       output(:,1) = -0.025;
+    elseif (matchpt < s_l)
+        %turn slight left
+        output(:,1) = -0.018;   
+    elseif (matchpt > h_r)
+     %   %turn hard right
+        output(:,1) = 0.05;
+    elseif (matchpt > s_r)
+        %turn slight right
+        output(:,1) = 0.018;
+    else
+        %go straight
+        output(:,1) = 0;
+    end
+    move = output;
+    
+end
 
 function d_fb = deltafeedback(Z_eq, Z_nl, K,delta)
     d_fb = K * (Z_eq - Z_nl)' + delta;
