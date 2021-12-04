@@ -12,9 +12,24 @@ lpinp = horzcat(0,lpinp.lpinp);
 
 testtrack = load('TestTrack.mat');
 center = testtrack.TestTrack.cline;
+
+right = testtrack.TestTrack.br;
+left = testtrack.TestTrack.bl;
 thet = testtrack.TestTrack.theta;
+track_struct = testtrack.TestTrack;
 
 
+figure(1)
+plot(lpinp,'r')
+hold on
+plot(diff(thet),'b')
+% lpinp = lowpass(movagin,100)
+dthet = angdiff(thet);
+
+plot(lowpass(dthet,100,1000),'k')
+
+lpinp=lowpass(dthet,100,1000);
+lpinp = horzcat(0,lpinp);
 delta = [-.5, .5]; % need to use this range to generate Delta_feedback most likely
 Fx = [-5000, 5000];% not sure how we constrain this range, probably similar to delta_fb
 m = 1400;
@@ -46,28 +61,71 @@ T=0:0.01:0.5;
 initial_z = [287; 5; -176; 0; 2; 0];
 Yprev = initial_z;
 Ystore = Yprev;
-for i=1:1000
-    testinput = steering(lpinp,center,[Yprev(1),Yprev(3)]);
-    [Y, T]=forwardIntegrateControlInput(testinput,Yprev);
-    Ystore = horzcat(Ystore,Y');
-    Yprev = Y(end,:)'; 
+Tstore = 0;
+Inputstore = [0;0;0];
+testinput = [0 100 0];
+for i=1:10000
+    testinput = steering(lpinp,track_struct,Yprev,testinput);
+    [Y, T]=forwardIntegrateControlInput(testinput(:,1:2),Yprev);
+    Y = Y';
+    Ystore = horzcat(Ystore,Y);
+    Yprev = Y(:,end); 
+    Tstore = horzcat(Tstore,T);
+    Inputstore = horzcat(Inputstore,testinput');
 end
 
+
+figure(2)
+subplot(2,1,1)
 x = center(1,:);
 y = center(2,:);
 plot(center(1,:),center(2,:));
+
 hold on
+plot(right(1,:),right(2,:),'r')
+plot(left(1,:),left(2,:),'r')
 title('Center Line of Track');
 % quiver(x(1:10:end),y(1:10:end),cos(thet(1:10:end)),sin(thet(1:10:end)))
 
 %subplot(3,1,1);
 Y = Ystore'; 
-plot(Y(:,1),Y(:,3),'b*');
+plot(Y(:,1),Y(:,3),'k');
+
+pointsize = 10;
+
+
+
+
+% keySet = {-2,-1,0,1,2};
+% valueSet = ["Hard Left","Soft Left", "Straight","Soft Right", "Hard Right"];
+% M = containers.Map(keySet,valueSet)
+% labels =values(M,num2cell(Inputstore(3,:)));
+gscatter(Y(:,1),Y(:,3),Inputstore(3,:));
+
+% legend({"Hard Left","Soft Left", "Straight","Soft Right", "Hard Right"},'FontSize',14)
 
 hold on
 
 %subplot(3,1,2)
 %plot(T,Y(:,2))
+
+
+subplot(2,1,2)
+
+
+plot(center(1,:),center(2,:));
+
+hold on
+plot(right(1,:),right(2,:),'r')
+plot(left(1,:),left(2,:),'r')
+title('Center Line of Track');
+
+plot(Y(:,1),Y(:,3),'k');
+
+pointsize = 10;
+scatter(Y(:,1),Y(:,3),pointsize,Y(:,2));
+colorbar
+
 
 
 % 1.2.1 Generate the equilibrium trajectory using Euler integration and linear tire forces
@@ -130,39 +188,104 @@ end
 
 %%FINAL OUTPUT WE WANT IS ARRAY OF [delta, Fx,n]
 % how do we generate Fx? 
-function move = steering(lpinp, cenpts, curr_pt)
+function move = steering(lpinp, ref_track, curr_state,lastoutput)
+    curr_state = curr_state';
+    cenpts = ref_track.cline;
+    ref_heading = ref_track.theta;
+    curr_pt = [curr_state(1), curr_state(3)];
+%     [Yprev(1),Yprev(3)]
     Idx = knnsearch(cenpts', curr_pt);
     matchpt = lpinp(1, Idx);
     
-    output = zeros(10,2);
-    output(:,2) = 500;
+    poseerror = angdiff(curr_state(4),ref_heading(Idx));
+    cenpts = cenpts';
+    if Idx <= length(cenpts) -1
+        myposline = [curr_state(1)-cenpts(Idx,1), curr_state(3) - cenpts(Idx,2),0];
+        trackline = [cenpts(Idx+1,1)- cenpts(Idx,1), cenpts(Idx+1,2) - cenpts(Idx,2),0]; 
+        whichside = cross(trackline,myposline);
+    else
+        whichside = 0;
+    end
+
+    maxPinput = 0.0175;
+    maxsteeringout = .15;
+    maxsteeringRateOfChange = .07;
+    desire_speed = 10;
+%     maxPinput = 0;
+
+
+    if abs(whichside(3)) > .3
+        Pgain = -whichside(3)* 0.1;
+        if abs(Pgain) > maxPinput
+            Pgain = sign(Pgain) * maxPinput;
+            a = "shrink";
+        end
+    else
+        Pgain = 0;
+    end
+
+    output = zeros(2,3);
+    output(:,2) = 50;
+%     speed_error = curr_state(2) - desire_speed;
+% 
+% %         min(1000, speed_error * 1000)
+%     if curr_state(2) > desire_speed
+%         output(:,2) = lastoutput(end,2)*.9;
+%     elseif curr_state(2) <= desire_speed
+%         output(:,2) = lastoutput(end,2)*1.1; 
+%     end
+
+%     output(:,2) = 200;
+
+
     %% FOR SOME REASON LEFT AND RIGHT ARE FLIPPED RIGHT NOW SO DEAL WITH IT
     %straight
     %slight left
-    s_l = -0.025;
+    s_l = -0.02;
     %slight right
-    s_r = 0.025; 
+    s_r = 0.02; 
     %hard left
     h_l = -0.1;
     %hard right
     h_r = 0.1; 
     
+    hard_turn = .05;
+    soft_turn = 0.0175;
+
     if(matchpt < h_l)
        %turn hard left
-       output(:,1) = -0.025;
+       output(:,1) = -hard_turn;
+       output(:,3) = -2;
     elseif (matchpt < s_l)
         %turn slight left
-        output(:,1) = -0.018;   
+        output(:,1) = -soft_turn;   
+        output(:,3) = -1;
     elseif (matchpt > h_r)
      %   %turn hard right
-        output(:,1) = 0.05;
+        output(:,1) = hard_turn;
+        output(:,3) = 2;
     elseif (matchpt > s_r)
         %turn slight right
-        output(:,1) = 0.018;
+        output(:,1) = soft_turn;
+        output(:,3) = 1;
     else
         %go straight
         output(:,1) = 0;
+        output(:,3) = 0;
     end
+
+    output(:,1) = output(:,1) + Pgain;
+
+    %rate limit
+    for i = 1:length(output)
+        outrate = lastoutput(end,1) - output(1,1);
+    if abs(outrate) > maxsteeringRateOfChange
+        output(i,1) = lastoutput(end,1) + sign(output(i,1))*maxsteeringRateOfChange;
+        output(i,1) = sign(output(i,1)) * min(abs(output(i,1)),maxsteeringout);
+        lastoutput = output(i,:);
+    end
+    end
+
     move = output;
     
 end
