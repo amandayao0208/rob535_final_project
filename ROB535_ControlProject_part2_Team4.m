@@ -64,7 +64,7 @@ initial_z = [287; 5; -176; 0; 2; 0];
 Yprev = initial_z;
 
 outputsteps = 2;
-loopsteps=33000;
+loopsteps=40000;
 
 % initialize vectors to store
 % state vector
@@ -205,6 +205,7 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
     maxsteeringout = .15;
     maxsteeringRateOfChange = .07;
     desire_speed = 5;
+    pGainoffCenter = 0.1;
     output = zeros(outputsteps,3);
     output(:,2) = 90;
 
@@ -224,12 +225,13 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
     %compute which side of center using cross product and
     %apply proportional steering correction
     whichside = whichwayoffcenter(Idx, cenpts, curr_state);
-    howfar = norm([cenpts(Idx,1) cenpts(Idx,2)] - [curr_state(1) curr_state(3)]);
-    if abs(whichside(3)) > .18
-        Pgain = -whichside(3)* 0.4;
+    refpt = [cenpts(Idx,1) cenpts(Idx,2)];
+
+    howfar = norm(refpt - curr_pt);
+    if abs(howfar) > 1
+        Pgain = -sign(whichside(3)) * howfar * pGainoffCenter;
         if abs(Pgain) > maxPinput
             Pgain = sign(Pgain) * maxPinput;
-            a = "shrink";
         end
     else
         Pgain = 0;
