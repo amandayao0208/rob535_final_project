@@ -7,8 +7,8 @@
 close all 
 clear all
 clc 
-lpinp = load('lowpassheadingdiff.mat');
-lpinp = horzcat(0,lpinp.lpinp);
+% lpinp = load('lowpassheadingdiff.mat');
+% lpinp = horzcat(0,lpinp.lpinp);
 
 testtrack = load('TestTrack.mat');
 center = testtrack.TestTrack.cline;
@@ -19,17 +19,19 @@ thet = testtrack.TestTrack.theta;
 track_struct = testtrack.TestTrack;
 
 
-figure(1)
-plot(lpinp,'r')
-hold on
-plot(diff(thet),'b')
+% figure(1)
+% plot(lpinp,'r')
+% hold on
+% plot(diff(thet),'b')
 % lpinp = lowpass(movagin,100)
 dthet = angdiff(thet);
 
-plot(lowpass(dthet,100,1000),'k')
+% plot(lowpass(dthet,100,1000),'k')
 
+%low pass filter the derivate of headings on the track
 lpinp=lowpass(dthet,100,1000);
-lpinp = horzcat(0,lpinp);
+%pad with a 0 so sizes match for lookup
+lpinp = horzcat(lpinp,0);
 delta = [-.5, .5]; % need to use this range to generate Delta_feedback most likely
 Fx = [-5000, 5000];% not sure how we constrain this range, probably similar to delta_fb
 m = 1400;
@@ -60,20 +62,32 @@ T=0:0.01:0.5;
 %Ca_f= F_zf*B*C*D;
 initial_z = [287; 5; -176; 0; 2; 0];
 Yprev = initial_z;
-Ystore = Yprev;
-Tstore = 0;
-Inputstore = [0;0;0];
+
+outputsteps = 2;
+loopsteps=33000;
+
+% initialize vectors to store
+% state vector
+Ystore = zeros(6,outputsteps*loopsteps);
+% timestep vector
+Tstore = zeros(1,outputsteps*loopsteps);
+% system inputs [steering angle; Fz; steeringdecisionrule @ current track
+% location
+Inputstore = zeros(3,outputsteps*loopsteps);
 testinput = [0 100 0];
-for i=1:10000
-    testinput = steering(lpinp,track_struct,Yprev,testinput);
+
+for i=1:loopsteps
+    testinput = steering(lpinp,track_struct,Yprev,testinput,outputsteps);
     [Y, T]=forwardIntegrateControlInput(testinput(:,1:2),Yprev);
     Y = Y';
-    Ystore = horzcat(Ystore,Y);
+    Ystore(:,(i-1)*outputsteps+1:(i-1)*outputsteps+outputsteps) = Y;
     Yprev = Y(:,end); 
-    Tstore = horzcat(Tstore,T);
-    Inputstore = horzcat(Inputstore,testinput');
+%     Tstore = horzcat(Tstore,T);
+    Inputstore(:,(i-1)*outputsteps+1:(i-1)*outputsteps+outputsteps) = testinput';
 end
 
+
+%plot results
 
 figure(2)
 subplot(2,1,1)
@@ -84,7 +98,7 @@ plot(center(1,:),center(2,:));
 hold on
 plot(right(1,:),right(2,:),'r')
 plot(left(1,:),left(2,:),'r')
-title('Center Line of Track');
+title('Vehicle State Colored by turning decision rule');
 % quiver(x(1:10:end),y(1:10:end),cos(thet(1:10:end)),sin(thet(1:10:end)))
 
 %subplot(3,1,1);
@@ -92,9 +106,6 @@ Y = Ystore';
 plot(Y(:,1),Y(:,3),'k');
 
 pointsize = 10;
-
-
-
 
 % keySet = {-2,-1,0,1,2};
 % valueSet = ["Hard Left","Soft Left", "Straight","Soft Right", "Hard Right"];
@@ -188,34 +199,34 @@ end
 
 %%FINAL OUTPUT WE WANT IS ARRAY OF [delta, Fx,n]
 % how do we generate Fx? 
-function move = steering(lpinp, ref_track, curr_state,lastoutput)
+function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
+    
+    maxPinput = 0.02;
+    maxsteeringout = .15;
+    maxsteeringRateOfChange = .07;
+    desire_speed = 5;
+    output = zeros(outputsteps,3);
+    output(:,2) = 90;
+
     curr_state = curr_state';
     cenpts = ref_track.cline;
     ref_heading = ref_track.theta;
     curr_pt = [curr_state(1), curr_state(3)];
-%     [Yprev(1),Yprev(3)]
+
+    %Find closest position on track to current location
     Idx = knnsearch(cenpts', curr_pt);
+    %look up change in heading using same index
     matchpt = lpinp(1, Idx);
     
     poseerror = angdiff(curr_state(4),ref_heading(Idx));
     cenpts = cenpts';
-    if Idx <= length(cenpts) -1
-        myposline = [curr_state(1)-cenpts(Idx,1), curr_state(3) - cenpts(Idx,2),0];
-        trackline = [cenpts(Idx+1,1)- cenpts(Idx,1), cenpts(Idx+1,2) - cenpts(Idx,2),0]; 
-        whichside = cross(trackline,myposline);
-    else
-        whichside = 0;
-    end
-
-    maxPinput = 0.0175;
-    maxsteeringout = .15;
-    maxsteeringRateOfChange = .07;
-    desire_speed = 10;
-%     maxPinput = 0;
-
-
-    if abs(whichside(3)) > .3
-        Pgain = -whichside(3)* 0.1;
+    
+    %compute which side of center using cross product and
+    %apply proportional steering correction
+    whichside = whichwayoffcenter(Idx, cenpts, curr_state);
+    howfar = norm([cenpts(Idx,1) cenpts(Idx,2)] - [curr_state(1) curr_state(3)]);
+    if abs(whichside(3)) > .18
+        Pgain = -whichside(3)* 0.4;
         if abs(Pgain) > maxPinput
             Pgain = sign(Pgain) * maxPinput;
             a = "shrink";
@@ -224,55 +235,17 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput)
         Pgain = 0;
     end
 
-    output = zeros(2,3);
-    output(:,2) = 50;
-%     speed_error = curr_state(2) - desire_speed;
-% 
-% %         min(1000, speed_error * 1000)
-%     if curr_state(2) > desire_speed
-%         output(:,2) = lastoutput(end,2)*.9;
+
+    if curr_state(2) > desire_speed
+        output(:,2) = lastoutput(end,2)*.9;
 %     elseif curr_state(2) <= desire_speed
 %         output(:,2) = lastoutput(end,2)*1.1; 
-%     end
-
-%     output(:,2) = 200;
+    end
 
 
     %% FOR SOME REASON LEFT AND RIGHT ARE FLIPPED RIGHT NOW SO DEAL WITH IT
-    %straight
-    %slight left
-    s_l = -0.02;
-    %slight right
-    s_r = 0.02; 
-    %hard left
-    h_l = -0.1;
-    %hard right
-    h_r = 0.1; 
-    
-    hard_turn = .05;
-    soft_turn = 0.0175;
 
-    if(matchpt < h_l)
-       %turn hard left
-       output(:,1) = -hard_turn;
-       output(:,3) = -2;
-    elseif (matchpt < s_l)
-        %turn slight left
-        output(:,1) = -soft_turn;   
-        output(:,3) = -1;
-    elseif (matchpt > h_r)
-     %   %turn hard right
-        output(:,1) = hard_turn;
-        output(:,3) = 2;
-    elseif (matchpt > s_r)
-        %turn slight right
-        output(:,1) = soft_turn;
-        output(:,3) = 1;
-    else
-        %go straight
-        output(:,1) = 0;
-        output(:,3) = 0;
-    end
+    output = steeringrule(matchpt, output);
 
     output(:,1) = output(:,1) + Pgain;
 
@@ -289,6 +262,55 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput)
     move = output;
     
 end
+
+function whichside = whichwayoffcenter(Idx, cenpts, curr_state)
+if Idx <= length(cenpts) -1
+    myposline = [curr_state(1)-cenpts(Idx,1), curr_state(3) - cenpts(Idx,2),0];
+    trackline = [cenpts(Idx+1,1)- cenpts(Idx,1), cenpts(Idx+1,2) - cenpts(Idx,2),0]; 
+    whichside = cross(trackline,myposline);
+else
+    whichside = 0;
+end
+end
+
+function output = steeringrule(matchpt, output)
+
+s_l = -0.02;
+%slight right
+s_r = 0.02; 
+%hard left
+h_l = -0.1;
+%hard right
+h_r = 0.1; 
+
+hard_turn = .06;
+soft_turn = 0.0175;
+
+if(matchpt < h_l)
+    %turn hard left
+    output(:,1) = -hard_turn;
+    output(:,3) = -2;
+elseif (matchpt < s_l)
+    %turn slight left
+    output(:,1) = -soft_turn;   
+    output(:,3) = -1;
+elseif (matchpt > h_r)
+    %   %turn hard right
+    output(:,1) = hard_turn;
+    output(:,3) = 2;
+elseif (matchpt > s_r)
+    %turn slight right
+    output(:,1) = soft_turn;
+    output(:,3) = 1;
+else
+    %go straight
+    output(:,1) = 0;
+    output(:,3) = 0;
+end
+end
+
+
+
 
 function d_fb = deltafeedback(Z_eq, Z_nl, K,delta)
     d_fb = K * (Z_eq - Z_nl)' + delta;
