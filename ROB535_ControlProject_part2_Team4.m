@@ -29,8 +29,11 @@ dthet = angdiff(thet);
 % plot(lowpass(dthet,100,1000),'k')
 
 %low pass filter the derivate of headings on the track
-lpinp=lowpass(dthet,100,1000);
+lpinp=lowpass(dthet,1000,10000);
+plot(lpinp)
+hold on
 %pad with a 0 so sizes match for lookup
+plot(diff(thet),'b')
 lpinp = horzcat(lpinp,0);
 delta = [-.5, .5]; % need to use this range to generate Delta_feedback most likely
 Fx = [-5000, 5000];% not sure how we constrain this range, probably similar to delta_fb
@@ -64,7 +67,7 @@ initial_z = [287; 5; -176; 0; 2; 0];
 Yprev = initial_z;
 
 outputsteps = 2;
-loopsteps=40000;
+loopsteps=43000;
 
 % initialize vectors to store
 % state vector
@@ -75,9 +78,9 @@ Tstore = zeros(1,outputsteps*loopsteps);
 % location
 Inputstore = zeros(3,outputsteps*loopsteps);
 testinput = [0 100 0];
-
+accum_error = 0;
 for i=1:loopsteps
-    testinput = steering(lpinp,track_struct,Yprev,testinput,outputsteps);
+    [testinput,accum_error] = steering(lpinp,track_struct,Yprev,testinput,outputsteps,accum_error);
     [Y, T]=forwardIntegrateControlInput(testinput(:,1:2),Yprev);
     Y = Y';
     Ystore(:,(i-1)*outputsteps+1:(i-1)*outputsteps+outputsteps) = Y;
@@ -199,13 +202,17 @@ end
 
 %%FINAL OUTPUT WE WANT IS ARRAY OF [delta, Fx,n]
 % how do we generate Fx? 
-function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
+function [move, accumlated_poserr] = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps,accumlated_poserr)
     
-    maxPinput = 0.02;
+    maxPinput = 0.07;
     maxsteeringout = .15;
     maxsteeringRateOfChange = .07;
+    max_accumerrorlimit = 5;
+    Igain = -.00001;
     desire_speed = 5;
-    pGainoffCenter = 0.3;
+    pGainoffCenter = .1;
+    Pdeadband = 1;
+    Ideadband = 1;
     output = zeros(outputsteps,3);
     output(:,2) = 90;
 
@@ -228,7 +235,9 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
     refpt = [cenpts(Idx,1) cenpts(Idx,2)];
 
     howfar = norm(refpt - curr_pt);
-    if abs(howfar) > 4
+
+    %proportional centerline control
+    if abs(howfar) > Pdeadband
         Pgain = -sign(whichside(3)) * howfar * pGainoffCenter;
         if abs(Pgain) > maxPinput
             Pgain = sign(Pgain) * maxPinput;
@@ -237,7 +246,24 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
         Pgain = 0;
     end
 
+    %integral centerline control
+%     accumlated_poserr = sign(whichside(3))* abs(howfar) + accumlated_poserr;
 
+    if howfar > Ideadband
+        accumlated_poserr = sign(whichside(3))* abs(howfar) + accumlated_poserr;
+    end
+
+    
+    %protect for windup
+    if abs(accumlated_poserr) >= max_accumerrorlimit & sign(whichside(3)) ~= sign(accumlated_poserr)
+        accumlated_poserr = 0;
+    end
+
+
+
+    Igain = accumlated_poserr * Igain;
+
+    %proportional speed control (only decrease force from baseline if exceed desired speed)
     if curr_state(2) > desire_speed
         output(:,2) = lastoutput(end,2)*.9;
 %     elseif curr_state(2) <= desire_speed
@@ -249,7 +275,7 @@ function move = steering(lpinp, ref_track, curr_state,lastoutput,outputsteps)
 
     output = steeringrule(matchpt, output);
 
-    output(:,1) = output(:,1) + Pgain;
+    output(:,1) = output(:,1) + Pgain + Igain;
 
     %rate limit
     for i = 1:length(output)
