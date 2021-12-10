@@ -67,7 +67,7 @@ initial_z = [287; 5; -176; 0; 2; 0];
 Yprev = initial_z;
 
 outputsteps = 2;
-loopsteps=43000;
+loopsteps=43100;
 
 % initialize vectors to store
 % state vector
@@ -141,6 +141,12 @@ scatter(Y(:,1),Y(:,3),pointsize,Y(:,2));
 colorbar
 
 
+
+
+% Yfin = [Ystore(1,:); Ystore(3,:)];
+Yfin = [Ystore(1,:); Ystore(3,:)];
+%call to see if we crash
+info = getTrajectoryInfo(Yfin',Inputstore(1:2,:)',[],T,testtrack.TestTrack);
 
 % 1.2.1 Generate the equilibrium trajectory using Euler integration and linear tire forces
 
