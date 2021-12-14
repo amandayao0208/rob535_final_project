@@ -14,7 +14,7 @@ theta = TestTrack.theta; % defining heading angle of track
 
 %% Generating random obstacles (will probably have to remove before submission)
 
-avoid_obs_flag = false;
+avoid_obs_flag = true;
 Xobs = 0;
 if avoid_obs_flag == true
     Nobs = 15;
@@ -22,6 +22,7 @@ if avoid_obs_flag == true
 end
 
 %% Finding relative angles of the track and low passing them
+low_p_flag = true;
 dtheta = ang_diff(theta); % unfortunately we can't use Matlab's angdiff b/c it's not in one of the allowed toolboxes
 lpinp=lowpass(dtheta,1000,10000); % low passing relative angles
 
@@ -67,10 +68,12 @@ Tstore = zeros(1,outputsteps*loopsteps); % timestep vector
 Inputstore = zeros(3,outputsteps*loopsteps); % storing the inputs over time ***this is what we are submitting for part 1
 testinput = [0 100 0]; % testing an input?
 accum_error = 0; % accumulated error? if so, I'm not sure what it's for
+lane_side_prev = "center";
+disp("desired lane: " + lane_side_prev);
 
 %% Initializing Simulation
-window_size = 80; % changes the figure window size
-sensing_radius = 150 / 2;   % sensing radius for sensing obstacles
+window_size = 160; % changes the figure window size
+sensing_radius = 150;   % sensing radius for sensing obstacles
 [xunit, yunit] = circle(Ystore(1,1), Ystore(3,1), sensing_radius);
 figure(1);
 hold on
@@ -88,16 +91,18 @@ p = patch(car(1,:), car(2,:), 'green');
 
 %% Running the model and performing calculations
 for i=1:loopsteps
-    %[testinput,accum_error] = steering_obs(lpinp,TestTrack,Yprev,testinput,outputsteps,accum_error, Xobs);
     %steering with obs enabled 
-    [testinput,accum_error] = steering_obs(lpinp,TestTrack,Yprev,testinput,outputsteps,accum_error, Xobs, avoid_obs_flag); % calling steering function
+    [testinput,accum_error, lane_side] = steering_obs(lpinp,TestTrack,Yprev,testinput,outputsteps,accum_error, Xobs, avoid_obs_flag, low_p_flag); % calling steering function
     [Y, T]=forwardIntegrateControlInput(testinput(:,1:2),Yprev); % new state calculation
     Y = Y'; % transposing state vector
     Ystore(:,(i-1)*outputsteps+1:(i-1)*outputsteps+outputsteps) = Y; % storing history of state
     Yprev = Y(:,end); % setting previous state to current state
-%     Tstore = horzcat(Tstore,T);
     Inputstore(:,(i-1)*outputsteps+1:(i-1)*outputsteps+outputsteps) = testinput'; % storing inputs
-    [p.XData, p.YData, h.XData, h.YData] = simulate(Ystore(:,i), window_size, sensing_radius);
+    [p.XData, p.YData, h.XData, h.YData] = simulate(Ystore(:,i), window_size, sensing_radius); % simulation of car with sensing radius
+    if lane_side ~= lane_side_prev
+        disp("desired lane: " + lane_side);
+        lane_side_prev = lane_side;
+    end
 end
 %% Plotting path with colored turning decisions
 figure(2)
@@ -168,7 +173,7 @@ function [throttle, velocity_err_hist] = longitudinal_controller(curr_vel, desir
 end
 
 function delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag)
-
+    a = 1.35;
     ke = 1;
     kv = 1;
     X = curr_state(1);    % current x position of car
@@ -182,46 +187,10 @@ function delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag)
     else
         theta = ref_track.theta;
     end
-    curr_pos = [X; Y];
-    
-    % calculate heading error
-    [track_idx, d1] = knnsearch(center, curr_pos);
-    [check_pos, d2] = knnsearch([center(:, track_idx - 1) center(:, track_idx + 1)], curr_pos);
-    if check_pos == 1
-        flag = "in_front";
-        desired_heading = theta(track_idx + 1);
-    else
-        flag = "behind";
-        desired_heading = theta(track_idx);
-    end
-    heading_error = desired_heading - psi;
-    heading_error = wrap(heading_error);
+    curr_pos = [X + a * cos(psi); Y + a * sin(psi)];
+    cross_track_error = check_pos(lpinp, ref_track, curr_state, curr_pos, psi, low_p_flag);
 
-    % calculate crosstrack error
-    % use scalene triangle formula to find crosstrack error
-    if flag == "in_front"
-        point2 = [center(1, track_idx + 1); center(2, track_idx + 1)];  % further way
-        point1 = [center(1, track_idx); center(2, track_idx)];
-        cross_track_error = scalene(point1, point2, d1, d2);
-        side = whichwayoffcenter(track_idx, center, curr_state);
-        side = sign(side(3));
-        if side > 0 % left side
-            cross_track_error = -cross_track_error;
-        end
-    end
-
-    if flag == "behind"
-        point2 = [center(1, track_idx); center(2, track_idx)];  % further way
-        point1 = [center(1, track_idx - 1); center(2, track_idx - 1)];
-        cross_track_error = scalene(point1, point2, d1, d2);
-        side = whichwayoffcenter(track_idx, cenpts, curr_state);
-        side = sign(side(3));
-        if side > 0 % left side
-            cross_track_error = -cross_track_error;
-        end
-    end
-
-    heading_error_cross_track = atan(ke * cross_track_error / (kv + u));
+    heading_error_cross_track = atan2(ke * cross_track_error / (kv + u));
 
     % control law
     steering_hope = heading_error + heading_error_cross_track;
@@ -232,20 +201,73 @@ function delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag)
     delta = steering_hope;
 end
 
-function [move, accumlated_poserr] = steering_obs(lpinp, ref_track, curr_state,lastoutput,outputsteps,accumlated_poserr,Xobs, avoid_obs_flag)
-    maxPinput = 0.07;   % maximum p gain
-    maxsteeringout = .15; % delta steering
-    maxsteeringRateOfChange = .07;  % derivative clamp 
-    max_accumerrorlimit = 5; % integral error limit
-    Igain = -.00001; %integral gain
-    desire_speed = 5; % Desired Fx steady state speed 
-    pGainoffCenter = .1; % P gain 
-    Pdeadband = 1; % deadbands around line (0 = line exactly pretty much)
-    Ideadband = 1;
-    output = zeros(outputsteps,3);
-    output(:,2) = 90;
+function [desired_heading, cross_track_error, side] = check_pos(lpinp, ref_track, curr_state, curr_pos, heading, low_p_flag)
+    psi = heading;  % current heading of car
+    center = ref_track.cline;
+    if low_p_flag == true
+        theta = lpinp;
+    else
+        theta = ref_track.theta;
+    end
 
-    curr_state = curr_state';   % transposing current state into a 
+    % calculate heading error
+    [track_idx, d1] = knnsearch(center', curr_pos);
+    flag = "start";
+    d2 =  sqrt((curr_pos(1) - center(1, track_idx + 1))^2 + (curr_pos(2) -  center(2, track_idx + 1))^2);
+    if track_idx ~= 1 && track_idx ~= length(center(1,:))
+        [idx_check, d2] = knnsearch([center(:, track_idx - 1)'; center(:, track_idx + 1)'], curr_pos);
+        if idx_check == 1
+            flag = "behind";
+            desired_heading = theta(track_idx);
+        else
+            flag = "in_front";
+            desired_heading = theta(track_idx + 1);
+        end
+    else
+        desired_heading = theta(track_idx);
+    end
+    heading_error = desired_heading - psi;
+    heading_error = wrap(heading_error);
+
+    % calculate crosstrack error
+    % use scalene triangle formula to find crosstrack error
+    if flag == "in_front"  || flag == "start"
+        point2 = [center(1, track_idx + 1); center(2, track_idx + 1)];
+        point1 = [center(1, track_idx); center(2, track_idx)];
+        cross_track_error = scalene(point1, point2, d1, d2);
+        assert(isreal(cross_track_error));
+        side = whichwayoffcenter(track_idx, center', curr_state);
+        if side > 0 % left side
+            cross_track_error = -cross_track_error;
+        end
+    end
+
+    if flag == "behind"
+        point2 = [center(1, track_idx); center(2, track_idx)]; 
+        point1 = [center(1, track_idx - 1); center(2, track_idx - 1)];
+        cross_track_error = scalene(point1, point2, d1, d2);
+        assert(isreal(cross_track_error));
+        side = whichwayoffcenter(track_idx, center', curr_state);
+        if side > 0 % left side
+            cross_track_error = -cross_track_error;
+        end
+    end
+end
+
+function [move, accumlated_poserr, lane_side] = steering_obs(lpinp, ref_track, curr_state,lastoutput,outputsteps,accumlated_poserr,Xobs, avoid_obs_flag, low_p_flag)
+    maxPinput = 0.07;               % maximum p gain
+    maxsteeringout = .15;           % delta steering
+    maxsteeringRateOfChange = .07;  % derivative clamp 
+    max_accumerrorlimit = 5;        % integral error limit
+    Igain = 0;                %integral gain
+    desire_speed = 5;               % Desired Fx steady state speed 
+    pGainoffCenter = .1;            % P gain 
+    Pdeadband = 1;                  % deadbands around line (0 = line exactly pretty much)
+    Ideadband = 1;
+    output = zeros(outputsteps,3);  % initializing output vector of inputs
+    output(:,2) = 90;   % not sure what this is for
+
+    curr_state = curr_state';   % transposing current state into a row vector?
     cenpts = ref_track.cline;   % define centerpoints
     right = ref_track.br;       % define right boundary
     left = ref_track.bl;        % define left boundary
@@ -256,22 +278,24 @@ function [move, accumlated_poserr] = steering_obs(lpinp, ref_track, curr_state,l
     ref_heading = ref_track.theta;
     curr_pt = [curr_state(1), curr_state(3)];
     
-    %Find closest position on track to current location
-    Idx = knnsearch(cenpts', curr_pt);
-    %look up change in heading using same index
-    matchpt = lpinp(1, Idx);
-    %poseerror = angdiff(curr_state(4),ref_heading(Idx));
-    cenpts = cenpts';
-    %compute which side of center using cross product and
-    %apply proportional steering correction
-    whichside = whichwayoffcenter(Idx, cenpts, curr_state);
-    refpt = [cenpts(Idx,1) cenpts(Idx,2)];
+%     %Find closest position on track to current location
+%     Idx = knnsearch(cenpts', curr_pt);
+%     %look up change in heading using same index
+%     matchpt = lpinp(Idx);
+%     %poseerror = angdiff(curr_state(4),ref_heading(Idx));
+%     cenpts = cenpts';
+%     %compute which side of center using cross product and
+%     %apply proportional steering correction
+%     whichside = whichwayoffcenter(Idx, cenpts, curr_state);
+%     refpt = [cenpts(Idx,1) cenpts(Idx,2)];
     
     if avoid_obs_flag == true
-        refpt = avoidObs(lpinp, ref_track, curr_state, Xobs);
+        [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs);
     end
-
-    howfar = norm(refpt - curr_pt);
+    new_ref_track = ref_track;
+    new_ref_track.cline = lane;
+%     howfar = norm(refpt - curr_pt);
+    [matchpt, howfar, whichside] = check_pos(lpinp, new_ref_track, curr_state, curr_pt, curr_state(5), low_p_flag);
 
     %proportional centerline control
     if abs(howfar) > Pdeadband
@@ -287,12 +311,12 @@ function [move, accumlated_poserr] = steering_obs(lpinp, ref_track, curr_state,l
 %     accumlated_poserr = sign(whichside(3))* abs(howfar) + accumlated_poserr;
 
     if howfar > Ideadband
-        accumlated_poserr = sign(whichside(3))* abs(howfar) + accumlated_poserr;
+        accumlated_poserr = sign(whichside(3)) * abs(howfar) + accumlated_poserr;
     end
 
     
     %protect for windup
-    if abs(accumlated_poserr) >= max_accumerrorlimit && sign(whichside(3)) ~= sign(accumlated_poserr)
+    if abs(accumlated_poserr) >= max_accumerrorlimit &&  sign(whichside(3)) ~= sign(accumlated_poserr)
         accumlated_poserr = 0;
     end
 
@@ -309,9 +333,7 @@ function [move, accumlated_poserr] = steering_obs(lpinp, ref_track, curr_state,l
     %% FOR SOME REASON LEFT AND RIGHT ARE FLIPPED RIGHT NOW SO DEAL WITH IT
 
     output = steeringrule(matchpt, output);
-
     output(:,1) = output(:,1) + Pgain + Igain;
-
     %rate limit
     for i = 1:length(output)
         outrate = lastoutput(end,1) - output(1,1);
@@ -321,15 +343,53 @@ function [move, accumlated_poserr] = steering_obs(lpinp, ref_track, curr_state,l
         lastoutput = output(i,:);
     end
     end
-
     move = output;
 end
 
-function refpt = avoidObs(lpinp, ref_track, curr_state, Xobs)
+function output = steeringrule(matchpt, output)
+%derivative threshholds
+s_l = -0.02;
+%slight right
+s_r = 0.02; 
+%hard left
+h_l = -0.1;
+%hard right
+h_r = 0.1;
+
+%deltas 
+hard_turn = .06;
+soft_turn = 0.0175;
+%second(3rd element)output is for plotting which rule was chosen 
+if(matchpt < h_l)
+    %turn hard left
+    output(:,1) = -hard_turn;
+    output(:,3) = -2;
+elseif (matchpt < s_l)
+    %turn slight left
+    output(:,1) = -soft_turn;   
+    output(:,3) = -1;
+elseif (matchpt > h_r)
+    %   %turn hard right
+    output(:,1) = hard_turn;
+    output(:,3) = 2;
+elseif (matchpt > s_r)
+    %turn slight right
+    output(:,1) = soft_turn;
+    output(:,3) = 1;
+else
+    %go straight
+    output(:,1) = 0;
+    output(:,3) = 0;
+end
+end
+
+function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
     curr_state = curr_state';   % transposing current state into a 
     cenpts = ref_track.cline;   % define centerpoints
     right = ref_track.br;       % define right boundary
     left = ref_track.bl;        % define left boundary
+    lane = cenpts;
+    lane_side = "center";
 
 
     % construct centerlines for left and right lane
@@ -385,11 +445,13 @@ function refpt = avoidObs(lpinp, ref_track, curr_state, Xobs)
 %             disp('Changing lane to right lane @\n')
 %             disp(curr_pt)
             lane = c_right';
+            lane_side = "right";
         else % else obstacle closer to right side
             % set new goal path to left lane
 %             disp('Changing lane to left lane @\n')
 %             disp(curr_pt)
             lane = c_left';
+            lane_side = "left";
         end
         Idx = knnsearch(lane, curr_pt);
         %look up change in heading using same index
@@ -412,6 +474,9 @@ function refpt = avoidObs(lpinp, ref_track, curr_state, Xobs)
         whichside = whichwayoffcenter(Idx, cenpts, curr_state);
         refpt = [cenpts(Idx,1) cenpts(Idx,2)];
     end
+    if size(lane, 1) ~= 2
+        lane = lane';
+    end
 end
 
 function whichside = whichwayoffcenter(Idx, cenpts, curr_state) %cross product of heading x centerline to determine side you're on
@@ -421,43 +486,6 @@ if Idx <= length(cenpts) - 1
     whichside = cross(trackline,myposline); % z dim of x-product tells if you are on left or right (left is positive, right is negative)
 else
     whichside = [0 0 0];
-end
-end
-
-function output = steeringrule(matchpt, output)
-%derivative threshholds
-s_l = -0.02;
-%slight right
-s_r = 0.02; 
-%hard left
-h_l = -0.1;
-%hard right
-h_r = 0.1;
-
-%deltas 
-hard_turn = .06;
-soft_turn = 0.0175;
-%second(3rd element)output is for plotting which rule was chosen 
-if(matchpt < h_l)
-    %turn hard left
-    output(:,1) = -hard_turn;
-    output(:,3) = -2;
-elseif (matchpt < s_l)
-    %turn slight left
-    output(:,1) = -soft_turn;   
-    output(:,3) = -1;
-elseif (matchpt > h_r)
-    %   %turn hard right
-    output(:,1) = hard_turn;
-    output(:,3) = 2;
-elseif (matchpt > s_r)
-    %turn slight right
-    output(:,1) = soft_turn;
-    output(:,3) = 1;
-else
-    %go straight
-    output(:,1) = 0;
-    output(:,3) = 0;
 end
 end
 
@@ -499,8 +527,8 @@ function cross_track_error = scalene(point1, point2, d1, d2)
         % closest waypoints, point1 and point2.
         assert(d1 > 0, "d1 must be greater than 0");
         assert(d2 > 0, "d2 must be greater than 0");
-        x2 = point2(1); % x-value point 1
-        x1 = point1(1); % x-value of point 2
+        x2 = point2(1); % x-value point 2
+        x1 = point1(1); % x-value of point 1
         y2 = point2(2); % y-value of point 2
         y1 = point1(2); % y-value of point 1
         D = sqrt((x2 - x1)^2 + (y2 - y1)^2);    % distance between the two waypoints
