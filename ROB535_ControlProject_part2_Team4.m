@@ -17,8 +17,9 @@ theta = TestTrack.theta; % defining heading angle of track
 avoid_obs_flag = true;
 Xobs = 0;
 if avoid_obs_flag == true
-    Nobs = 15;
-    Xobs = generateRandomObstacles(Nobs,TestTrack);
+    %Nobs = 25;
+    %Xobs = generateRandomObstacles(Nobs,TestTrack);
+    Xobs = {[267.0753 -121.1613;273.3790 -118.8634;272.5333 -116.5435;266.2296 -118.8413], [246.491470035382,-80.8900077438253;252.791647654848,-78.6999545797396;252.272949213638,-77.2078025333206;245.972771594173,-79.3978556974062]};
 end
 
 %% Finding relative angles of the track and low passing them
@@ -290,6 +291,7 @@ function [move, accumlated_poserr, lane_side] = steering_obs(lpinp, ref_track, c
 %     refpt = [cenpts(Idx,1) cenpts(Idx,2)];
     
     if avoid_obs_flag == true
+        %disp('checking for obs')
         [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs);
     end
     new_ref_track = ref_track;
@@ -403,7 +405,7 @@ function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
     
     % calculate center point of each obstacle
     Obs = [];   % we don't know how many obstacles we have, so we can't preallocate a vector
-    for i=1:size(Xobs_seen)
+    for i=1:length(Xobs_seen)
         Obs(i,:) = mean(Xobs_seen{i});  % creating a vector of center points of the obstacles seen
     end
     
@@ -413,17 +415,22 @@ function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
     heading = curr_state(5);
     % calculate distance between car and obstacles
     if(Obs)
+        %disp('There are obstacles within the circle')
         for i=1:size(Obs)
            obx = Obs(i,1); % x location of obs
            oby = Obs(i,2); % y location
            x_d = obx - curr_pt(1); % x distance of triangle
            y_d = oby - curr_pt(2); % y distance of triangle
-           theta = atan(x_d/y_d); % angle of vector to obstacle from x axis
-           alpha = abs(heading - theta); % angle between heading and obstacle
+           theta = atan2(y_d,x_d); % angle of vector to obstacle from x axis
+           %alpha = heading - theta; % angle between heading and obstacle
            dist = norm(curr_pt - [obx,oby]);
-           obs_vec = [dist,obx,oby,x_d,y_d,alpha];
-           if (alpha < deg2rad(90))
+           obs_vec = [dist,obx,oby,x_d,y_d,theta];
+           if (theta > (heading - deg2rad(90)) && theta < (heading+deg2rad(90)))
               front_obs = [front_obs;obs_vec]; 
+           %else
+              %disp('Obstacle is not in front of us')
+              %disp(heading)
+              %disp(alpha)
            end
         end
     end
@@ -435,12 +442,15 @@ function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
         nxt_obs = front_obs(I,2:3);
         %WANT TO: calculate which side obstacle is on (L,R), then tell car to
         %go to follow the lane oposite to that side.
-        [~,l_point] = knnsearch(left',nxt_obs); % nearest point to obstacle on either side
-        [~,r_point] = knnsearch(right',nxt_obs);
+        %[~,l_point] = knnsearch(left',nxt_obs); % nearest point to obstacle on either side
+        %[~,r_point] = knnsearch(right',nxt_obs);
+        [cen_idx ,~] = knnsearch(cenpts',nxt_obs); % find nearest centerpt indx
         %side_l = norm(l_point - nxt_obs); % distance between obstacle and track sides
         %side_r = norm(r_point - nxt_obs);
+        nxt_obs(3) = front_obs(I,3);
+        which_side = whichwayoffcenter(cen_idx, cenpts', nxt_obs);
         
-        if (l_point < r_point) % obstacle closer to left side of track
+        if (which_side(3) >= 0) % obstacle closer to left side of track
             % set new goal path to right lane
 %             disp('Changing lane to right lane @\n')
 %             disp(curr_pt)
