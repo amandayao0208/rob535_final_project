@@ -46,22 +46,29 @@ lpinp=lowpass(dtheta,1000,10000);   % low passing relative angles
 lpinp = horzcat(lpinp,0);           % pad with a 0 so sizes match for lookup
 
 %% Generating random obstacles (will probably have to remove before submission)
-avoid_obs_flag = false; % flag to determine whether or not we are using obstacles
+avoid_obs_flag = true; % flag to determine whether or not we are using obstacles
 Xobs = 0;   % initializing to zero in case we don't use obstacles so things don't break
 if avoid_obs_flag == true
-    Nobs = 15;  % setting the number of obstacles to generate
+    Nobs = 20;  % setting the number of obstacles to generate
     Xobs = generateRandomObstacles(Nobs,TestTrack); % generating obstacles
 end
 
 %% initializing simulation
 window_size = 60;       % changes the figure window size
 sensing_radius = 150;   % sensing radius for sensing obstacles
+c_right = (right + center)/2;
+c_left = (left+center)/2;
 [xunit, yunit] = circle(initial_state(1), initial_state(3), sensing_radius);    % getting circle coordinates
 figure(1);  % creating figure 1
 hold on
 plot(center(1,:),center(2,:),'k.-');    % plotting center line
 plot(right(1,:),right(2,:),'r');        % plotting right boundary
 plot(left(1,:),left(2,:),'r');          % plotting left boundary
+plot(c_left(1,:),c_left(2,:),'g');
+plot(c_right(1,:),c_right(2,:),'g');
+if avoid_obs_flag == true
+    draw_obs(Xobs)
+end
 h = plot(xunit, yunit,'b');             % creating plot object for circle
 car = get_triangle_points(initial_state, 3, 4); % getting car coordinates to be represented as a triangle
 p = patch(car(1,:), car(2,:), 'green');         % plotting car as green triangle
@@ -80,7 +87,12 @@ T = 0:dt:0.5;           % timespan for the forwardIntegrateControlInput.m functi
 % continues until the closest index is the final index of the centerline
 while track_idx ~= length(center(1,:))
     % computing values
+    ref_track.cline = center;
     n_count = n_count + 1; % incrementing counter first since it started at zero
+    [~, lane, laneside] = avoidObs(lpinp, ref_track, curr_state, Xobs);
+    ref_track.cline = lane;
+    %plot(ref_track.cline(1,:),ref_track.cline(2,:),'ro')
+    disp(laneside)
     track_idx = knnsearch(center', [curr_state(1) curr_state(3)]);  % computes the closest track index to the car
     [Fx, velocity_err_hist] = longitudinal_controller(curr_state, velocity_err_hist, dt);   % returns a value for Fx--this function controls the speed using PID (currently just P)
     delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag);    % returns value for steering angle using the Stanley controller
@@ -98,6 +110,15 @@ while track_idx ~= length(center(1,:))
 end
 disp('finished') % displays when the last index is the closest point--we need to append one extra point so the car passes the finish line
 
+function draw_obs(Xobs)
+    for i = 1:length(Xobs)
+        points = Xobs{i};
+        x_vals = [points(:,1); points(1,1)];
+        y_vals = [points(:,2); points(1,2)];
+
+        plot(x_vals, y_vals, 'b')
+    end
+end
 
 function [CarDataX, CarDataY, circleDataX, circleDataY] = simulate(curr_state, window_size, sensing_radius)
     X = curr_state(1);    % current x position of car
@@ -343,4 +364,110 @@ function output = mapfun(value,fromLow,fromHigh,toLow,toHigh)
     narginchk(5,5)
     nargoutchk(0,1)
     output = (value - fromLow) .* (toHigh - toLow) ./ (fromHigh - fromLow) + toLow;
+end
+
+function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
+    curr_state = curr_state';   % transposing current state into a 
+    cenpts = ref_track.cline;   % define centerpoints
+    right = ref_track.br;       % define right boundary
+    left = ref_track.bl;        % define left boundary
+    lane = cenpts;
+    lane_side = "center";
+
+
+    % construct centerlines for left and right lane
+    c_right = (right + cenpts)/2;
+    c_left = (left+cenpts)/2;
+    ref_heading = ref_track.theta;
+    curr_pt = [curr_state(1), curr_state(3)];
+    
+    % check if we see any obstacles (stores in cell array)
+    Xobs_seen = senseObstacles(curr_pt, Xobs);
+    
+    % calculate center point of each obstacle
+    Obs = [];   % we don't know how many obstacles we have, so we can't preallocate a vector
+    for i=1:length(Xobs_seen)
+        Obs(i,:) = mean(Xobs_seen{i});  % creating a vector of center points of the obstacles seen
+    end
+    
+    % extract heading angle from vehicle and relative angle to obstacle
+    % center point
+    front_obs =[];  % creating an empty vector for the first obstacle
+    heading = curr_state(5);
+    % calculate distance between car and obstacles
+    if(Obs)
+        %disp('There are obstacles within the circle')
+        for i=1:size(Obs)
+           obx = Obs(i,1); % x location of obs
+           oby = Obs(i,2); % y location
+           hx = curr_pt(1) + 10*cos(heading);
+           hy = curr_pt(2) + 10*sin(heading);
+           l_1 = [hx,hy,0] - [curr_pt(1),curr_pt(2),0];
+           l_2 = [obx,oby,0] - [curr_pt(1),curr_pt(2),0];
+           theta = atan2(norm(cross(l_1,l_2)), dot(l_1,l_2));
+
+           dist = norm(curr_pt - [obx,oby]);
+           obs_vec = [dist,obx,oby,hx,hy,theta];
+            %status = [h_lb, ' < ', o_ang, ' < ', h_ub];
+           %disp(status)
+           %disp(rad2deg(theta))
+           if (theta > (deg2rad(-90)) && theta < (deg2rad(90)))
+              front_obs = [front_obs;obs_vec]; 
+           %else
+              %disp('Obstacle is not in front of us')
+              %disp(heading)
+              %disp(alpha)
+           end
+        end
+    end
+    % final front_obs vector: [distance, x,y, x_d, y_d, alpha] 
+    % find closest obstacle
+    if(front_obs)
+        %disp(status);
+        [~,I] = min(front_obs(:,1));
+        %grab global x,y of next closest obstacle
+        nxt_obs = front_obs(I,2:3);
+        %WANT TO: calculate which side obstacle is on (L,R), then tell car to
+        %go to follow the lane oposite to that side.
+        [cen_idx ,~] = knnsearch(cenpts',nxt_obs); % find nearest centerpt indx
+        nxt_obs(3) = front_obs(I,3);
+        which_side = whichwayoffcenter(cen_idx, cenpts', nxt_obs);
+        
+        if (which_side(3) >= 0) % obstacle closer to left side of track
+            % set new goal path to right lane
+%             disp('Changing lane to right lane @\n')
+%             disp(curr_pt)
+            lane = c_right';
+            lane_side = "right";
+        else % else obstacle closer to right side
+            % set new goal path to left lane
+%             disp('Changing lane to left lane @\n')
+%             disp(curr_pt)
+            lane = c_left';
+            lane_side = "left";
+        end
+        Idx = knnsearch(lane, curr_pt);
+        %look up change in heading using same index
+        matchpt = lpinp(1, Idx);
+        %poseerror = angdiff(curr_state(4),ref_heading(Idx));
+     
+        %compute which side of center using cross product and
+        %apply proportional steering correction
+        whichside = whichwayoffcenter(Idx, lane, curr_state);
+        refpt = [lane(Idx,1) lane(Idx,2)];
+    else
+        %Find closest position on track to current location
+        Idx = knnsearch(cenpts', curr_pt);
+        %look up change in heading using same index
+        matchpt = lpinp(1, Idx);
+        %poseerror = angdiff(curr_state(4),ref_heading(Idx));
+        cenpts = cenpts';
+        %compute which side of center using cross product and
+        %apply proportional steering correction
+        whichside = whichwayoffcenter(Idx, cenpts, curr_state);
+        refpt = [cenpts(Idx,1) cenpts(Idx,2)];
+    end
+    if size(lane, 1) ~= 2
+        lane = lane';
+    end
 end
