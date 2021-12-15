@@ -45,6 +45,13 @@ dtheta = ang_diff(theta);   % unfortunately we can't use Matlab's angdiff b/c it
 lpinp=lowpass(dtheta,1000,10000);   % low passing relative angles
 lpinp = horzcat(lpinp,0);           % pad with a 0 so sizes match for lookup
 
+%% Generating random obstacles (will probably have to remove before submission)
+avoid_obs_flag = false; % flag to determine whether or not we are using obstacles
+Xobs = 0;   % initializing to zero in case we don't use obstacles so things don't break
+if avoid_obs_flag == true
+    Nobs = 15;  % setting the number of obstacles to generate
+    Xobs = generateRandomObstacles(Nobs,TestTrack); % generating obstacles
+end
 
 %% initializing simulation
 window_size = 60;       % changes the figure window size
@@ -120,7 +127,7 @@ function [throttle, velocity_err_hist] = longitudinal_controller(curr_state, vel
     MIN_HEAD_RATE = 0;          % minimum heading rate (used for slowing down the car as it gets bigger)
     MAX_HEAD_RATE = 0.3;        % maximum heading rate " "
     curr_heading_rate = abs(curr_state(6)); % defining the current heading rate (r)
-    desired_vel = mapfun(curr_heading_rate, MIN_HEAD_RATE, MAX_HEAD_RATE, MIN_DES_VEL, MAX_DES_VEL);   % determining a desired velocity between MIN_DES_VEL and MAX_DES_VEL using the mapping function (like it's used in Arduino code)
+    desired_vel = mapfun(curr_heading_rate, MIN_HEAD_RATE, MAX_HEAD_RATE, MAX_DES_VEL, MIN_DES_VEL);   % determining a desired velocity between MIN_DES_VEL and MAX_DES_VEL using the mapping function (like it's used in Arduino code)
 
     prev_error = velocity_err_hist(end);    % computing the previous velocity error
     curr_error = desired_vel - curr_vel;   % computing the current velocity error
