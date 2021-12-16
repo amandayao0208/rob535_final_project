@@ -27,15 +27,20 @@ clear
 
 %% loading main track and defining inputs
 load('TestTrack.mat');      % loading the test track
-center = TestTrack.cline;   % defining right bonudary of track
-right = TestTrack.br;       % defining right boundary of track
-left = TestTrack.bl;        % defining left boundary of track
-theta = TestTrack.theta;    % defining heading angle of track
-ref_track = TestTrack;      % I don't really need to define a second struct, but this is how it is currently set up
+center = [TestTrack.cline, [1480;840]];   % defining right bonudary of track
+right = [TestTrack.br, [1490;840]];       % defining right boundary of track
+left = [TestTrack.bl, [1470;840]];        % defining left boundary of track
+theta = TestTrack.theta ;    % defining heading angle of track
+theta = [theta theta(end)];
+
+ref_track.cline = center;
+ref_track.br = right;
+ref_track.bl = left;
+ref_track.theta = theta;
 
 % initial_state = [-5; 5; 5; 0; pi/4; 0];   % state vector for other cases
 initial_state = [287; 5; -176; 0; 2; 0];    % normal initial state
-initial_input = [0 100];    % initial input--I don't think it really matters what this is
+initial_input = [0 1000];    % initial input--I don't think it really matters what this is
 store_state = [];   % making empty vector to store state
 store_inputs = [];  % making empty vector to store inputs
 
@@ -46,15 +51,17 @@ lpinp=lowpass(dtheta,1000,10000);   % low passing relative angles
 lpinp = horzcat(lpinp,0);           % pad with a 0 so sizes match for lookup
 
 %% Generating random obstacles (will probably have to remove before submission)
-avoid_obs_flag = true; % flag to determine whether or not we are using obstacles
+avoid_obs_flag = false; % flag to determine whether or not we are using obstacles
 Xobs = 0;   % initializing to zero in case we don't use obstacles so things don't break
 if avoid_obs_flag == true
     Nobs = 20;  % setting the number of obstacles to generate
     Xobs = generateRandomObstacles(Nobs,TestTrack); % generating obstacles
 end
+% load Xobs_save.mat
+% Xobs = Xobs_save{3};
 
 %% initializing simulation
-window_size = 60;       % changes the figure window size
+window_size = 160;       % changes the figure window size
 sensing_radius = 150;   % sensing radius for sensing obstacles
 c_right = (right + center)/2;
 c_left = (left+center)/2;
@@ -86,13 +93,16 @@ T = 0:dt:0.5;           % timespan for the forwardIntegrateControlInput.m functi
 %% Running the model
 % continues until the closest index is the final index of the centerline
 while track_idx ~= length(center(1,:))
-    % computing values
-    ref_track.cline = center;
     n_count = n_count + 1; % incrementing counter first since it started at zero
-    [~, lane, laneside] = avoidObs(lpinp, ref_track, curr_state, Xobs);
-    ref_track.cline = lane;
-    %plot(ref_track.cline(1,:),ref_track.cline(2,:),'ro')
-    disp(laneside)
+
+    % avoid obstacles stuff
+    if avoid_obs_flag == true
+        ref_track.cline = center;
+        [~, lane, laneside] = avoidObs(lpinp, ref_track, curr_state, Xobs);
+        ref_track.cline = lane;
+    end
+
+    % computing values
     track_idx = knnsearch(center', [curr_state(1) curr_state(3)]);  % computes the closest track index to the car
     [Fx, velocity_err_hist] = longitudinal_controller(curr_state, velocity_err_hist, dt);   % returns a value for Fx--this function controls the speed using PID (currently just P)
     delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag);    % returns value for steering angle using the Stanley controller
@@ -108,6 +118,9 @@ while track_idx ~= length(center(1,:))
     % simulating
     [p.XData, p.YData, h.XData, h.YData] = simulate(curr_state, window_size, sensing_radius); % simulation of car with sensing radius
 end
+
+% ROB535_ControlProject_part1_input = store_inputs;
+% save('ROB535_ControlProject_part1_Team4.mat', 'ROB535_ControlProject_part1_input')
 disp('finished') % displays when the last index is the closest point--we need to append one extra point so the car passes the finish line
 
 function draw_obs(Xobs)
@@ -144,7 +157,7 @@ function [throttle, velocity_err_hist] = longitudinal_controller(curr_state, vel
     kd = 0;     % derivative gain
     curr_vel = curr_state(2);   % defining the current velocity
     MIN_DES_VEL = 10;           % maximum desired velocity (determined by trial and error--we can definitely change this)
-    MAX_DES_VEL = 20;           % minimum desired velocity " "
+    MAX_DES_VEL = 35;           % minimum desired velocity " "
     MIN_HEAD_RATE = 0;          % minimum heading rate (used for slowing down the car as it gets bigger)
     MAX_HEAD_RATE = 0.3;        % maximum heading rate " "
     curr_heading_rate = abs(curr_state(6)); % defining the current heading rate (r)
@@ -170,7 +183,7 @@ function delta = stanleyController(lpinp, ref_track, curr_state, low_p_flag)
     % angle using the stanley controller.
 
     a = 1.35;   % distance from the center of gravity of the car to the front steering axle
-    ke = 2;     % a proportional gain for how fast we want to turn towards the desired target lane
+    ke = 2.5;     % a proportional gain for how fast we want to turn towards the desired target lane
     kv = 1;     % a gain to make sure the denominator isn't zero
     X = curr_state(1);    % current x position of car
     u = curr_state(2);    % current forward velocity of car
@@ -383,6 +396,7 @@ function [refpt, lane, lane_side] = avoidObs(lpinp, ref_track, curr_state, Xobs)
     
     % check if we see any obstacles (stores in cell array)
     Xobs_seen = senseObstacles(curr_pt, Xobs);
+
     
     % calculate center point of each obstacle
     Obs = [];   % we don't know how many obstacles we have, so we can't preallocate a vector

@@ -1,4 +1,4 @@
-function [Y,U,t_total,t_update] = forwardIntegrate()
+function [Y,U,t_total,t_update, Xobs, T] = forwardIntegrate()
 % [Y,U,t_total,t_update] = forwardIntegrate
 % 
 % This script returns the vehicle trajectory with control input being
@@ -27,8 +27,8 @@ function [Y,U,t_total,t_update] = forwardIntegrate()
 % Created: 31 Oct 2021
 
 
-    load('TestTrack.mat') % load test track
-
+    load('TestTrack.mat'); % load test track
+    T = 0:0.01:0.5;
     dt = 0.5; 
     TOTAL_TIME = 20*60; % second
     
@@ -40,7 +40,10 @@ function [Y,U,t_total,t_update] = forwardIntegrate()
     Y(1,:) = [287,5,-176,0,2,0];
 
     % generate obstacles along the track
-    Xobs = generateRandomObstacles(9 + randi(16),TestTrack);
+%     Xobs = generateRandomObstacles(9 + randi(16),TestTrack);
+    load('Xobs_save.mat');
+    Xobs = Xobs_save{3};
+
 
     iteration = 1; % a counter that counts how many times the control input 
                    % generation function is called.
@@ -59,7 +62,7 @@ function [Y,U,t_total,t_update] = forwardIntegrate()
         % compute control inputs, and record the time consumption
         t_temp = toc(TIMER);
         %%%%%%%%%%%%%%%% THIS IS WHERE YOUR FUNCTION IS CALLED (replace in your team number). %%%%%%%%%%%%%%%%%%%%%%%%%%%
-        [Utemp, FLAG_terminate] = ROB535_ControlProject_part2_Team<your team number>(TestTrack,Xobs_seen,curr_state); %%
+        [Utemp, FLAG_terminate] = ROB535_ControlProject_part2_Team4(TestTrack,Xobs_seen,curr_state); %%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %         FLAG_terminate = randi(2)-1                                 % GSIs: This line is just for us to debug. Feel free to play with it if you want
 %         Utemp = rand(dt/0.01+1 + FLAG_terminate* (randi(10)-5),2);  % GSIs: This line is just for us to debug. Feel free to play with it if you want        
